@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>BunkerDNS — a bunker dome with an antenna still transmitting</title>
+  <!-- Same tile geometry as the other RainnWorks icons: 824px square, 100px margins. -->
+  <path d="M285 100 H739 C865 100 924 159 924 285 V739 C924 865 865 924 739 924 H285 C159 924 100 865 100 739 V285 C100 159 159 100 285 100 Z" fill="#000"/>
+  <g fill="none" stroke="#fff" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Ground line and the dome sitting on it. -->
+    <path d="M214 724 H810"/>
+    <path d="M272 724 V650 C272 522 380 444 512 444 C644 444 752 522 752 650 V724"/>
+    <!-- Viewing slit and arched door. -->
+    <path d="M390 566 H634"/>
+    <path d="M462 724 V668 C462 640 484 620 512 620 C540 620 562 640 562 668 V724"/>
+    <!-- Antenna mast, still transmitting. -->
+    <path d="M512 444 V300"/>
+    <path d="M448 244 C426 268 426 300 448 324"/>
+    <path d="M576 244 C598 268 598 300 576 324"/>
+    <path d="M396 204 C356 250 356 318 396 364"/>
+    <path d="M628 204 C668 250 668 318 628 364"/>
+  </g>
+</svg>
