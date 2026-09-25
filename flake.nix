@@ -1,5 +1,5 @@
 {
-  description = "pi-dns-stack - Ad-blocking DNS on Raspberry Pi with NixOS";
+  description = "BunkerDNS - home DNS and ad blocking that keeps working when the internet does not, on Raspberry Pis with NixOS";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
