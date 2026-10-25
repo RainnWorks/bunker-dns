@@ -64,6 +64,56 @@
     options = [ "mode=0755" "size=512m" ];
   };
 
+  # Watchdog for a dead Spotify session. spotifyd keeps one TCP connection
+  # to a Spotify access point for as long as it is logged in. When that
+  # connection drops (DNS outage, WAN blip) it neither reconnects nor exits,
+  # so Restart= never fires: it keeps advertising "Kitchen" and keeps
+  # reporting a logged-in user over Zeroconf, but phones can't connect.
+  #
+  # The check: spotifyd says it has a user (Zeroconf getInfo activeUser) yet
+  # holds no established connection to a public address. Two failed checks
+  # in a row (2-4 minutes) restart it; one alone may be a reconnect in
+  # flight. Not logged in at all is normal after a restart and is left alone.
+  systemd.services.spotifyd-watchdog = {
+    description = "Restart spotifyd when its Spotify session has died";
+    after = [ "spotifyd.service" ];
+    serviceConfig.Type = "oneshot";
+    path = with pkgs; [ iproute2 curl jq gawk gnugrep coreutils systemd ];
+    script = ''
+      strike=/run/spotifyd-watchdog.strike
+      pid=$(systemctl show -p MainPID --value spotifyd)
+      if [ "$pid" -le 0 ]; then rm -f "$strike"; exit 0; fi
+
+      # The Zeroconf port is random per start; ask each port spotifyd listens on.
+      user=""
+      for port in $(ss -Htlnp | grep "pid=$pid," | awk '{ n = split($4, a, ":"); print a[n] }' | sort -u); do
+        user=$(curl -sf -m 3 "http://127.0.0.1:$port/?action=getInfo" | jq -r '.activeUser // ""') && [ -n "$user" ] && break
+      done
+      if [ -z "$user" ]; then rm -f "$strike"; exit 0; fi
+
+      private='^(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|\[::1\]|\[fe80|\[::ffff:(127|10|192\.168)\.)'
+      public=$(ss -Htnp state established | grep "pid=$pid," | awk '{ print $4 }' | grep -Evc "$private" || true)
+      if [ "$public" -gt 0 ]; then rm -f "$strike"; exit 0; fi
+
+      if [ -e "$strike" ]; then
+        echo "spotifyd reports user $user but has no Spotify connection; restarting"
+        rm -f "$strike"
+        systemctl restart spotifyd
+      else
+        echo "spotifyd reports user $user but has no Spotify connection; checking again next run"
+        touch "$strike"
+      fi
+    '';
+  };
+
+  systemd.timers.spotifyd-watchdog = {
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnBootSec = "5min";
+      OnUnitActiveSec = "2min";
+    };
+  };
+
   # mDNS so <hostname>.local resolves on the LAN (Spotify Connect itself
   # advertises via Zeroconf independently).
   services.avahi = {
