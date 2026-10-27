@@ -64,6 +64,51 @@
     options = [ "mode=0755" "size=512m" ];
   };
 
+  # Watchdog for a dead Spotify Connect websocket. spotifyd keeps a
+  # websocket to Spotify's "dealer"; that is how phones see and control
+  # the speaker. When it drops, spotifyd reconnects and logs
+  # "active device is <...> with session <...>". After the DNS outage on
+  # 2026-10-20 it failed twice and never logged that again: still running,
+  # still logged in, still advertising "Kitchen", but no phone could use it
+  # for a week. It doesn't exit, so Restart= never fires.
+  #
+  # The check reads the current run's journal: if the last websocket
+  # failure is newer than the last reconnect and more than 3 minutes old,
+  # restart. Healthy reconnects land within seconds, so 3 minutes leaves
+  # room for a slow one.
+  systemd.services.spotifyd-watchdog = {
+    description = "Restart spotifyd when its Spotify Connect websocket has died";
+    after = [ "spotifyd.service" ];
+    serviceConfig.Type = "oneshot";
+    path = with pkgs; [ systemd gnugrep gawk coreutils ];
+    script = ''
+      systemctl is-active --quiet spotifyd || exit 0
+      run=$(systemctl show -p InvocationID --value spotifyd)
+      [ -n "$run" ] || exit 0
+      log=$(journalctl _SYSTEMD_INVOCATION_ID="$run" -o short-unix --no-pager)
+
+      last() { printf '%s\n' "$log" | grep -aE "$1" | tail -n 1 | awk '{ print int($1) }'; }
+      failed=$(last 'Websocket (connection failed|peer does not respond)')
+      [ -n "$failed" ] || exit 0
+      recovered=$(last 'active device is')
+      if [ -n "$recovered" ] && [ "$recovered" -ge "$failed" ]; then exit 0; fi
+
+      age=$(( $(date +%s) - failed ))
+      if [ "$age" -gt 180 ]; then
+        echo "websocket failed ''${age}s ago and never reconnected; restarting spotifyd"
+        systemctl restart spotifyd
+      fi
+    '';
+  };
+
+  systemd.timers.spotifyd-watchdog = {
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnBootSec = "5min";
+      OnUnitActiveSec = "2min";
+    };
+  };
+
   # mDNS so <hostname>.local resolves on the LAN (Spotify Connect itself
   # advertises via Zeroconf independently).
   services.avahi = {
