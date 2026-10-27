@@ -1,5 +1,5 @@
 {
-  description = "BunkerDNS - home DNS and ad blocking that keeps working when the internet does not, on Raspberry Pis with NixOS";
+  description = "pi-dns-stack - Ad-blocking DNS on Raspberry Pi with NixOS";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
@@ -11,31 +11,26 @@
   outputs = { self, nixpkgs, nixpkgs-unstable, ... }:
     let
       system = "aarch64-linux";
-      cfg = import ./config.nix;
       pkgs-unstable = import nixpkgs-unstable { inherit system; };
+      hosts = [ "dns1" "dns2" "kitchen-music" ];
+
+      mkHost = cfg: host: nixpkgs.lib.nixosSystem {
+        inherit system;
+        specialArgs = { inherit cfg pkgs-unstable; };
+        modules = [ ./hosts/${host}.nix ];
+      };
+
+      # prefix + host -> nixosConfiguration, one per host, for one config.
+      mkHosts = prefix: cfg: builtins.listToAttrs (map (host: {
+        name = "${prefix}${host}";
+        value = mkHost cfg host;
+      }) hosts);
     in {
-      nixosConfigurations.dns1 = nixpkgs.lib.nixosSystem {
-        inherit system;
-        specialArgs = { inherit cfg pkgs-unstable; };
-        modules = [
-          ./hosts/dns1.nix
-        ];
-      };
-
-      nixosConfigurations.dns2 = nixpkgs.lib.nixosSystem {
-        inherit system;
-        specialArgs = { inherit cfg pkgs-unstable; };
-        modules = [
-          ./hosts/dns2.nix
-        ];
-      };
-
-      nixosConfigurations.kitchen-music = nixpkgs.lib.nixosSystem {
-        inherit system;
-        specialArgs = { inherit cfg pkgs-unstable; };
-        modules = [
-          ./hosts/kitchen-music.nix
-        ];
-      };
+      # dns1, dns2, kitchen-music: built from your config.local.nix.
+      # rainnworks-*: the same hosts with RainnWorks' own config
+      # (sites/rainnworks.nix). That's what GitHub Actions builds and deploys.
+      nixosConfigurations =
+        mkHosts "" (import ./config.nix)
+        // mkHosts "rainnworks-" (import ./sites/rainnworks.nix);
     };
 }

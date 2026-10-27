@@ -6,6 +6,16 @@
 #
 # Activated via `core.hooksPath = .githooks` (set by `make init`).
 
+# Decrypted secrets are written as *.secret.* (see .gitignore). Never commit
+# one, even if it was force-added.
+secrets=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '(^|/)[^/]*\.secret\.[^/]*$')
+if [ -n "$secrets" ]; then
+  echo "ERROR: refusing to commit decrypted secrets:"
+  printf '  %s\n' $secrets
+  echo "Commit the encrypted secrets/*.sops.* file instead."
+  exit 1
+fi
+
 if git diff --cached --quiet -- config.local.nix 2>/dev/null; then
   # No staged content changes (intent-to-add registrations have no content
   # diff). Fine to commit.

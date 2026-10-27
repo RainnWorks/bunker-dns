@@ -1,9 +1,12 @@
 config.local.nix
 out/
 result
-flake.lock
 *.img
 *.img.zst
 *.tar
 *.tar.gz
 .claude/
+
+# Decrypted secrets: anything decrypted from secrets/*.sops.* is written as
+# *.secret.*. Keep this block last, so no rule above can re-include them.
+*.secret.*
