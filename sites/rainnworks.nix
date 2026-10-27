@@ -4,8 +4,8 @@
 # address is in the public Inlustra/thenairn.com Caddyfile. Secrets go in
 # secrets/*.sops.* instead.
 let
-  # GitHub Actions' deploy key, accepted only from Tower: the runner reaches
-  # the Pis over Tower's WireGuard, which masquerades it as Tower's address.
+  # The deploy key, accepted only from Tower, where the deploy job runs: its
+  # runner is a container there, so the Pis see Tower's address.
   deployKey = ./../ci/deploy_ed25519.pub;
 in
 {

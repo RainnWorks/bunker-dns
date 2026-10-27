@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy built systems to the Pis one at a time, from GitHub Actions.
+# Deploy built systems to the Pis one at a time, from Tower's runner.
 #
 #   scripts/ci-deploy.sh <host>=<store path> [<host>=<store path> ...]
 #
@@ -11,8 +11,10 @@
 # stay on what they had.
 #
 # Expects ssh to reach tom@<ip> with the deploy key (the workflow sets
-# NIX_SSHOPTS and an ssh config). Every check runs over SSH on the Pi: the
-# WireGuard peer can reach port 22 and nothing else.
+# NIX_SSHOPTS and an ssh config). SYSTEMS_STORE, if set, is where the built
+# systems are (the workflow's artifact, a file:// store); otherwise they
+# must already be in the local Nix store. Each Pi fetches what it can from
+# cache.nixos.org itself, so only what's ours crosses the LAN.
 set -euo pipefail
 
 declare -A IP=( [dns1]=192.168.96.45 [dns2]=192.168.96.60 [kitchen-music]=192.168.96.157 )
@@ -53,7 +55,8 @@ for arg in "$@"; do
   fi
 
   echo "  copying closure"
-  nix copy --no-check-sigs --to "ssh-ng://tom@$ip" "$path"
+  nix copy --no-check-sigs --substitute-on-destination \
+    ${SYSTEMS_STORE:+--from "$SYSTEMS_STORE"} --to "ssh-ng://tom@$ip" "$path"
 
   echo "  switching"
   if on_pi "$ip" "sudo nix-env -p /nix/var/nix/profiles/system --set '$path' && sudo '$path/bin/switch-to-configuration' switch" &&

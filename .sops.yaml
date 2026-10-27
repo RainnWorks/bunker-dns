@@ -1,6 +1,0 @@
-# Everything under secrets/ is encrypted to the deploy age key. Its secret half
-# is in 1Password ("BunkerDNS GitHub deploy", vault claw) and in GitHub (SOPS_AGE_KEY,
-# environment production). Decrypt to *.secret.*, which git always ignores.
-creation_rules:
-  - path_regex: ^secrets/.*\.sops\.[^.]+$
-    age: age1urc4yjxns0tjqcfhxktj5n2rxalr876vwtlqwwdedam0u485rq0ssa6edk

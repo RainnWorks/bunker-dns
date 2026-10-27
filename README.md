@@ -201,5 +201,5 @@ To rebuild the README artwork, see [assets/src/README.md](assets/src/README.md).
 This repo also runs RainnWorks' own three nodes. Their config is `sites/rainnworks.nix`, built as the `rainnworks-*` flake outputs. Nothing in it is secret. Your own `config.local.nix` builds the plain `dns1`, `dns2` and `kitchen-music` outputs as before.
 
 - **Pull requests** build all three nodes on GitHub's ARM runners. Nothing is deployed.
-- **A merge to `main`** builds them again, connects to the home network over WireGuard, and deploys one node at a time: `dns2`, `dns1`, then `kitchen-music`. Each node checks its services and DNS after switching, and rolls itself back if the check fails. The run then stops.
-- **Secrets** live encrypted in `secrets/*.sops.*` ([sops](https://github.com/getsops/sops), age). Anything decrypted is written as `*.secret.*`, which git always ignores and the pre-commit hook refuses. The only secret GitHub holds is the age key, in an environment only `main` can use.
+- **A merge to `main`** builds them again and hands the result to a runner on RainnWorks' home server, which deploys one node at a time over the LAN: `dns2`, `dns1`, then `kitchen-music`. A node whose system didn't change is skipped. Each node checks its services and DNS after switching, and rolls back if the check fails. The run then stops.
+- **Secrets** never go in the repo in plain text. Decrypted files are named `*.secret.*`, which git always ignores and the pre-commit hook refuses.

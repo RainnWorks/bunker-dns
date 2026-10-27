@@ -1,0 +1,4 @@
+# Labels of RainnWorks self-hosted runners, so actionlint knows them.
+self-hosted-runner:
+  labels:
+    - tower

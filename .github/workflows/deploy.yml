@@ -1,12 +1,14 @@
-# Build every host on each pull request; build and deploy on main.
+# Build every host on GitHub's ARM runners; on main, deploy from Tower.
 #
-# The deploy job reaches the Pis through Tower's WireGuard, as peer
-# 10.253.0.6, which Tower limits to SSH on the three Pis. Its only GitHub
-# secret is SOPS_AGE_KEY, in the `production` environment, which only main
-# can use: pull requests, and forks above all, never see it. Everything else
-# it needs is in secrets/deploy.sops.env, encrypted to that key.
+# `build` runs on every pull request and on main. On main it also uploads
+# the built systems as an artifact. `deploy` then runs on Tower's own runner,
+# inside the home network, and pushes them to the Pis over the LAN.
 #
-# This repo is public, so these logs are too. Never print a decrypted value.
+# Tower's runner is on the home network, and this repo is public. Only main
+# can reach it: `deploy` runs on pushes to main only, its SSH key is in the
+# `production` environment, which only main can use, and workflow runs from
+# outside contributors need approval first. Never approve one from a
+# stranger: it would run their version of this file.
 name: Build and deploy
 
 on:
@@ -20,8 +22,11 @@ permissions:
 
 jobs:
   build:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04-arm
+    outputs:
+      dns1: ${{ steps.build.outputs.dns1 }}
+      dns2: ${{ steps.build.outputs.dns2 }}
+      kitchen-music: ${{ steps.build.outputs.kitchen-music }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: No decrypted secrets in the repo
@@ -29,23 +34,6 @@ jobs:
           if git ls-files | grep -E '(^|/)[^/]*\.secret\.[^/]*$'; then
             echo "::error::A decrypted *.secret.* file is committed."; exit 1
           fi
-      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
-      - name: Build
-        run: |
-          nix build --no-link \
-            .#nixosConfigurations.rainnworks-dns1.config.system.build.toplevel \
-            .#nixosConfigurations.rainnworks-dns2.config.system.build.toplevel \
-            .#nixosConfigurations.rainnworks-kitchen-music.config.system.build.toplevel
-
-  deploy:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04-arm
-    environment: production
-    concurrency:
-      group: deploy
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
 
       - name: Build
@@ -55,38 +43,47 @@ jobs:
             path=$(nix build --no-link --print-out-paths \
               ".#nixosConfigurations.rainnworks-$host.config.system.build.toplevel")
             echo "$host=$path" >> "$GITHUB_OUTPUT"
+            echo "$host: $path"
           done
 
-      - name: Decrypt deploy secrets
+      - name: Pack the systems for Tower
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: |
+          nix copy --to "file://$PWD/systems?compression=zstd" \
+            ${{ steps.build.outputs.dns1 }} \
+            ${{ steps.build.outputs.dns2 }} \
+            ${{ steps.build.outputs.kitchen-music }}
+          du -sh systems
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        with:
+          name: systems
+          path: systems
+          retention-days: 3
+          compression-level: 0 # already zstd
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, tower]
+    environment: production
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: systems
+          path: systems
+
+      - name: SSH key for the Pis
         env:
-          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
         run: |
-          umask 077
-          nix shell --inputs-from . nixpkgs#sops -c sops --decrypt secrets/deploy.sops.env > deploy.secret.env
-          while IFS='=' read -r key value; do
-            [ -n "$key" ] && echo "::add-mask::$value"
-          done < deploy.secret.env
-
-      - name: Connect to Tower
-        run: |
-          set -a; . ./deploy.secret.env; set +a
-          sudo apt-get install -y -qq wireguard-tools >/dev/null
-          sudo install -m 600 /dev/null /etc/wireguard/wg0.conf
-          sudo tee /etc/wireguard/wg0.conf >/dev/null <<EOF
-          [Interface]
-          PrivateKey = $WG_PRIVATE_KEY
-          Address = $WG_ADDRESS
-
-          [Peer]
-          PublicKey = $WG_SERVER_PUBLIC_KEY
-          Endpoint = $WG_ENDPOINT
-          AllowedIPs = 192.168.96.45/32, 192.168.96.60/32, 192.168.96.157/32
-          PersistentKeepalive = 25
-          EOF
-          sudo wg-quick up wg0
-
           install -d -m 700 ~/.ssh
-          printf '%s' "$DEPLOY_SSH_KEY_B64" | base64 -d > ~/.ssh/deploy
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy
           chmod 600 ~/.ssh/deploy
           cat > ~/.ssh/config <<EOF
           Host 192.168.96.*
@@ -100,15 +97,14 @@ jobs:
 
       - name: Deploy, one Pi at a time
         env:
-          NIX_SSHOPTS: -F /home/runner/.ssh/config
+          SYSTEMS_STORE: file://${{ github.workspace }}/systems
         run: |
+          export NIX_SSHOPTS="-F $HOME/.ssh/config"
           scripts/ci-deploy.sh \
-            "dns2=${{ steps.build.outputs.dns2 }}" \
-            "dns1=${{ steps.build.outputs.dns1 }}" \
-            "kitchen-music=${{ steps.build.outputs.kitchen-music }}"
+            "dns2=${{ needs.build.outputs.dns2 }}" \
+            "dns1=${{ needs.build.outputs.dns1 }}" \
+            "kitchen-music=${{ needs.build.outputs.kitchen-music }}"
 
-      - name: Disconnect
+      - name: Remove the key
         if: always()
-        run: |
-          sudo wg-quick down wg0 2>/dev/null || true
-          rm -f deploy.secret.env ~/.ssh/deploy
+        run: rm -f ~/.ssh/deploy
