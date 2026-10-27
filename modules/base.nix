@@ -38,9 +38,7 @@
   users.users.tom = {
     isNormalUser = true;
     extraGroups = [ "wheel" ];
-    openssh.authorizedKeys.keys = [
-      cfg.sshKey
-    ];
+    openssh.authorizedKeys.keys = [ cfg.sshKey ] ++ (cfg.deployKeys or [ ]);
   };
 
   security.sudo.wheelNeedsPassword = false;
