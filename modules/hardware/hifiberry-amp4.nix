@@ -45,7 +45,7 @@ in
   #
   #   slider 0%  → -45 dB (very quiet but audible)
   #   slider 50% → softvol log-mapped (rough background-music level)
-  #   slider 100% → -10 dB (loud, not ear-melting)
+  #   slider 100% → 0 dB (full output — as loud as the amp will go)
   #
   # The PCM5121's Digital control alone has the *full* hardware range
   # (-103.5 dB to 0 dB), which on this amp+speaker combo gives a slider where
@@ -65,7 +65,7 @@ in
         control.name "SoftMaster"
         control.card sndrpihifiberry
         min_dB -45.0
-        max_dB -10.0
+        max_dB 0.0
         resolution 256
     }
 
