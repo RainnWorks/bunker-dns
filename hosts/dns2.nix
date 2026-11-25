@@ -15,7 +15,7 @@
   ];
   networking.defaultGateway = "192.168.96.1";
 
-  # Shares the floating DNS addresses (cfg.vips) with the other DNS node.
+  # Backup for the floating DNS address (cfg.vip): takes it when dns1 is down.
   bunkerDns.failover = {
     interface = "enu1u4";
     peer = "192.168.96.45";

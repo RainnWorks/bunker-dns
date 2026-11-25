@@ -5,23 +5,28 @@
 #
 # Hosts go in the order given; the workflow passes dns2, dns1, kitchen-music.
 #
-# dns1 and dns2 share two floating DNS addresses (keepalived, see
-# modules/dns/failover.nix); each holds its own while both are healthy. A DNS
-# Pi is deployed blue-green, so DNS never stops:
+# dns1 and dns2 share the one floating DNS address the UDM hands out
+# (keepalived, see modules/dns/failover.nix): dns1 holds it, dns2 is its
+# backup. A DNS Pi is deployed so that DNS never stops:
 #
 #   1. Check the peer is healthy and not drained.
-#   2. Drain this Pi: its floating address moves to the peer. Check the peer
-#      holds both and both answer.
+#   2. Drain this Pi. Check the peer holds the floating address and it answers
+#      (asked from this Pi): draining dns2 moves nothing, draining dns1 moves
+#      the address to dns2.
 #   3. Copy the new system, make it the boot default, reboot.
 #   4. Check it came back on the new system and kernel, its services are
-#      active and it answers DNS on its own address.
-#   5. Undrain it, and check it holds its floating address again and answers
-#      on it.
+#      active, and it answers DNS on its own address.
+#   5. Undrain it. Check that dns1 holds the address and it answers, and that
+#      dns2 is keepalived's BACKUP, ready to take over.
 #
 # If 4 or 5 fails, the Pi goes back to its previous generation (rebooting into
-# it if the kernel differs) and stays drained, so the peer keeps both
-# addresses; the run stops. Undrain it by hand once it's fixed:
+# it if the kernel differs) and stays drained, so the address stays on the
+# peer; the run stops. Undrain it by hand once it's fixed:
 # `sudo rm /var/lib/keepalived/drained`.
+#
+# The first rollout of keepalived: the peer doesn't run it yet, so there is no
+# handover, and the deployed Pi holds the address on its own until the peer
+# is deployed too.
 #
 # kitchen-music has no floating address: it is switched live, checked, and
 # rolled back if the check fails, then the run stops.
@@ -45,10 +50,8 @@ declare -A SERVICES=(
 )
 DOMAIN=$(nix eval --raw --file sites/rainnworks.nix domain)
 LOCAL_IP=$(nix eval --raw --file sites/rainnworks.nix localIP)
-declare -A VIP=(
-  [dns1]=$(nix eval --raw --file sites/rainnworks.nix vips.dns1)
-  [dns2]=$(nix eval --raw --file sites/rainnworks.nix vips.dns2)
-)
+VIP=$(nix eval --raw --file sites/rainnworks.nix vip.address)
+PRIMARY=$(nix eval --raw --file sites/rainnworks.nix vip.primary)
 DRAIN=/var/lib/keepalived/drained
 PROFILE=/nix/var/nix/profiles/system
 
@@ -72,7 +75,10 @@ answers() {
   [ "$(on_pi "${IP[$from]}" "dig +short +time=2 +tries=1 @$addr deploy-check.$DOMAIN" 2>/dev/null)" = "$LOCAL_IP" ]
 }
 
-holds() { on_pi "${IP[$1]}" "ip -4 -o addr show | grep -qF ' inet $2/'" 2>/dev/null; }
+holds() { on_pi "${IP[$1]}" "ip -4 -o addr show | grep -qF ' inet $VIP/'" 2>/dev/null; }
+lets_go() { ! holds "$1"; }
+# keepalived's last state on the Pi this boot: MASTER, BACKUP or FAULT.
+vrrp_state() { on_pi "${IP[$1]}" "sudo journalctl -b -u keepalived -o cat | grep -o 'Entering [A-Z]* STATE' | tail -1 | cut -d' ' -f2" 2>/dev/null; }
 drained() { on_pi "${IP[$1]}" "test -e $DRAIN"; }
 drain() { on_pi "${IP[$1]}" "sudo mkdir -p ${DRAIN%/*} && sudo touch $DRAIN"; }
 undrain() { on_pi "${IP[$1]}" "sudo rm -f $DRAIN"; }
@@ -151,20 +157,25 @@ fail() {
   exit 1
 }
 
-# Health check and undrain, then the Pi must hold its floating address again
-# and answer on it, asked from the peer.
+# Undrain, then the primary must hold the floating address and answer on it
+# (asked from the other Pi), and the other Pi must be keepalived's BACKUP.
+# While the peer has no keepalived yet (the first rollout), this Pi holds it.
 undrain_and_check() {
-  local host=$1 peer=${PEER[$1]}
+  local host=$1 holder=$PRIMARY other
+  has_keepalived "${PEER[$host]}" || holder=$host
+  other=${PEER[$holder]}
   echo "  undraining"
   undrain "$host"
-  if retry 30 holds "$host" "${VIP[$host]}" && retry 10 answers "$peer" "${VIP[$host]}"; then
-    echo "  holds ${VIP[$host]} again"
+  if retry 30 holds "$holder" && retry 10 lets_go "$other" && retry 10 answers "$other" "$VIP" &&
+     { [ "$host" = "$holder" ] || retry 10 is_backup "$host"; }; then
+    echo "  $holder holds $VIP and answers; $host is $(vrrp_state "$host")"
     return 0
   fi
-  echo "  did not take ${VIP[$host]} back, or doesn't answer on it"
+  echo "  after undraining, $holder doesn't hold $VIP or doesn't answer on it, or $host isn't BACKUP ($(vrrp_state "$host"))"
   drain "$host" || true
   return 1
 }
+is_backup() { [ "$(vrrp_state "$1")" = BACKUP ]; }
 
 deploy_dns_pi() {
   local host=$1 path=$2 ip=${IP[$1]} peer=${PEER[$1]}
@@ -179,13 +190,13 @@ deploy_dns_pi() {
     dns_pi_healthy "$host" "$path" ||
       fail "$host is on the new system but unhealthy; it stays drained. Later hosts were not deployed."
     undrain_and_check "$host" ||
-      fail "$host is healthy but didn't take back ${VIP[$host]}; it stays drained. Later hosts were not deployed."
+      fail "$host is healthy but the undrain check failed; it stays drained. Later hosts were not deployed."
     return 0
   fi
 
   # The first rollout of keepalived: the peer doesn't run it yet, so there is
-  # nothing to hand over to. Nothing points at the floating addresses yet
-  # either, and clients still have the peer's own address.
+  # nothing to hand over to. Nothing points at the floating address yet
+  # either: clients still have the Pis' own addresses.
   local handover=1
   if ! has_keepalived "$peer"; then
     echo "  $peer doesn't run keepalived yet (first rollout): no handover"
@@ -203,12 +214,11 @@ deploy_dns_pi() {
   echo "  draining"
   drain "$host"
   if [ $handover = 1 ]; then
-    if ! retry 20 holds "$peer" "${VIP[$host]}" || ! holds "$peer" "${VIP[$peer]}" ||
-       ! retry 10 answers "$host" "${VIP[$host]}" || ! answers "$host" "${VIP[$peer]}"; then
+    if ! retry 20 holds "$peer" || ! retry 10 lets_go "$host" || ! retry 10 answers "$host" "$VIP"; then
       undrain "$host"
-      fail "$peer didn't take both floating addresses, or they don't answer. $host was undrained; nothing was deployed to it."
+      fail "$peer doesn't hold $VIP, or it doesn't answer. $host was undrained; nothing was deployed to it."
     fi
-    echo "  $peer holds ${VIP[$host]} and ${VIP[$peer]}, and both answer"
+    echo "  $peer holds $VIP and it answers"
   fi
 
   echo "  copying closure"
@@ -231,9 +241,9 @@ deploy_dns_pi() {
 
   if ! drained "$host" 2>/dev/null; then drain "$host" || true; fi
   if rollback_dns_pi "$host"; then
-    fail "$host failed its checks on the new system and was rolled back. It stays drained, so $peer holds both floating addresses: undrain it by hand. Later hosts were not deployed."
+    fail "$host failed its checks on the new system and was rolled back. It stays drained, so $VIP stays on $peer: undrain it by hand. Later hosts were not deployed."
   fi
-  fail "$host failed its checks on the new system, and the rollback failed too. It stays drained, so $peer holds both floating addresses. Later hosts were not deployed."
+  fail "$host failed its checks on the new system, and the rollback failed too. It stays drained, so $VIP stays on $peer. Later hosts were not deployed."
 }
 
 deploy_live() {

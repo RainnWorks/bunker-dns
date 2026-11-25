@@ -9,12 +9,12 @@
   # Timezone
   timeZone = "Europe/London";
 
-  # Floating DNS addresses: one per DNS node, the one it holds while both are
-  # healthy. If a node goes down, the other holds both. Hand these out as DNS
-  # from your router, and pick them outside its DHCP pool. Leave `vips` out to
-  # run without them.
-  vips = {
-    dns1 = "192.168.1.3";
-    dns2 = "192.168.1.4";
+  # The floating DNS address: the one DNS server your router hands out. The
+  # primary node holds it; the other takes it over whenever the primary is
+  # down. Pick it outside your router's DHCP pool. Leave `vip` out to hand out
+  # the nodes' own addresses instead.
+  vip = {
+    address = "192.168.1.3";
+    primary = "dns1";
   };
 }

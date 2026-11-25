@@ -1,4 +1,4 @@
-# Two DNS nodes sharing the floating addresses, and a client asking them.
+# Two DNS nodes sharing the floating address, and a client asking it.
 #
 #   nix build .#checks.x86_64-linux.failover -L
 #
@@ -12,9 +12,9 @@ let
   cfg = {
     domain = "example.com";
     localIP = "192.168.1.100";
-    vips = {
-      dns1 = "192.168.1.3";
-      dns2 = "192.168.1.4";
+    vip = {
+      address = "192.168.1.3";
+      primary = "dns1";
     };
   };
   own = {
@@ -60,21 +60,20 @@ in
   };
 
   testScript = ''
-    A = "${cfg.vips.dns1}"
-    B = "${cfg.vips.dns2}"
+    VIP = "${cfg.vip.address}"
     LOCAL = "${cfg.localIP}"
     DRAIN = "/var/lib/keepalived/drained"
 
-    def has(node, vip):
-        return f"inet {vip}/" in node.succeed("ip -4 -o addr show dev eth1")
+    def has(node):
+        return f"inet {VIP}/" in node.succeed("ip -4 -o addr show dev eth1")
 
-    def wait_holds(node, vip):
-        node.wait_until_succeeds(f"ip -4 -o addr show dev eth1 | grep -q 'inet {vip}/'", timeout=90)
+    def wait_holds(node):
+        node.wait_until_succeeds(f"ip -4 -o addr show dev eth1 | grep -q 'inet {VIP}/'", timeout=90)
 
-    def wait_lets_go(node, vip):
-        node.wait_until_fails(f"ip -4 -o addr show dev eth1 | grep -q 'inet {vip}/'", timeout=90)
+    def wait_lets_go(node):
+        node.wait_until_fails(f"ip -4 -o addr show dev eth1 | grep -q 'inet {VIP}/'", timeout=90)
 
-    def answers(addr):
+    def answers(addr=VIP):
         # dig ignores a reply from any other address than the one it asked,
         # so this also checks the answer comes back from the floating address.
         client.wait_until_succeeds(
@@ -90,6 +89,10 @@ in
         # AdGuard and CoreDNS cache in front of Unbound.
         node.succeed("systemctl restart adguardhome coredns")
 
+    def stays(holder, other, secs=20):
+        holder.sleep(secs)
+        assert has(holder) and not has(other)
+
     start_all()
     for n in [dns1, dns2]:
         n.wait_for_unit("coredns.service")
@@ -99,66 +102,72 @@ in
         n.wait_for_unit("keepalived.service")
     client.wait_for_unit("multi-user.target")
 
-    with subtest("each node holds its own floating address"):
-        wait_holds(dns1, A)
-        wait_holds(dns2, B)
-        assert not has(dns1, B) and not has(dns2, A)
-        for addr in [A, B, "${own.dns1}", "${own.dns2}"]:
+    with subtest("dns1 holds the floating address"):
+        wait_holds(dns1)
+        stays(dns1, dns2, 10)
+        for addr in [VIP, "${own.dns1}", "${own.dns2}"]:
             answers(addr)
 
-    with subtest("a drained node hands its address to the peer"):
+    with subtest("draining the backup moves nothing"):
+        dns2.succeed(f"touch {DRAIN}")
+        stays(dns1, dns2)
+        answers()
+        dns2.succeed(f"rm {DRAIN}")
+
+    with subtest("draining dns1 hands the address to dns2"):
         dns1.succeed(f"touch {DRAIN}")
-        wait_holds(dns2, A)
-        wait_lets_go(dns1, A)
-        answers(A)
+        wait_holds(dns2)
+        wait_lets_go(dns1)
+        answers()
         answers("${own.dns1}")
 
-    with subtest("a drained node stays drained through a reboot"):
+    with subtest("a drained dns1 stays drained through a reboot"):
         dns1.shutdown()
-        answers(A)
+        answers()
         dns1.start()
         dns1.wait_for_unit("coredns.service")
         dns1.wait_for_unit("keepalived.service")
-        dns1.sleep(20)
-        assert not has(dns1, A) and not has(dns1, B)
-        assert has(dns2, A) and has(dns2, B)
+        stays(dns2, dns1)
 
-    with subtest("undrained, it takes its address back"):
+    with subtest("undrained, dns1 takes the address back"):
         dns1.succeed(f"rm {DRAIN}")
-        wait_holds(dns1, A)
-        wait_lets_go(dns2, A)
-        answers(A)
+        wait_holds(dns1)
+        wait_lets_go(dns2)
+        answers()
 
-    with subtest("CoreDNS down: the peer takes the address"):
-        dns2.succeed("systemctl stop coredns")
-        wait_holds(dns1, B)
-        answers(B)
-        dns2.succeed("systemctl start coredns")
-        wait_holds(dns2, B)
-        wait_lets_go(dns1, B)
+    with subtest("CoreDNS down on dns1: dns2 takes the address"):
+        dns1.succeed("systemctl stop coredns")
+        wait_holds(dns2)
+        answers()
+        dns1.succeed("systemctl start coredns")
+        wait_holds(dns1)
+        wait_lets_go(dns2)
 
-    with subtest("one node can't resolve the internet: the peer takes its address"):
+    with subtest("dns1 can't resolve the internet, dns2 can: dns2 takes the address"):
+        unbound_internet(dns1, False)
+        wait_holds(dns2)
+        answers()
+        unbound_internet(dns1, True)
+        wait_holds(dns1)
+        wait_lets_go(dns2)
+
+    with subtest("only the backup can't resolve the internet: nothing moves"):
         unbound_internet(dns2, False)
-        wait_holds(dns1, B)
-        answers(B)
+        stays(dns1, dns2, 30)
         unbound_internet(dns2, True)
-        wait_holds(dns2, B)
-        wait_lets_go(dns1, B)
 
     with subtest("neither can resolve the internet: nothing moves, local names answer"):
         unbound_internet(dns1, False)
         unbound_internet(dns2, False)
-        dns1.sleep(30)
-        assert has(dns1, A) and not has(dns1, B)
-        assert has(dns2, B) and not has(dns2, A)
-        answers(A)
-        answers(B)
+        stays(dns1, dns2, 30)
+        answers()
         unbound_internet(dns1, True)
         unbound_internet(dns2, True)
 
-    with subtest("a node loses power: the peer takes its address"):
-        dns2.crash()
-        wait_holds(dns1, B)
-        answers(B)
+    with subtest("dns1 loses power: dns2 takes the address"):
+        wait_holds(dns1)
+        dns1.crash()
+        wait_holds(dns2)
+        answers()
   '';
 }

@@ -1,25 +1,25 @@
 { config, lib, pkgs, cfg, ... }:
 
-# Floating DNS addresses, shared by two DNS nodes with keepalived (VRRP).
+# One floating DNS address, shared by two DNS nodes with keepalived (VRRP).
 #
-# cfg.vips names one floating address per node: the one that node holds while
-# both are healthy. Your router hands out these addresses as DNS, not the
-# nodes' own. Each node is the other's backup: when one is drained, fails its
-# checks, or is off, the other holds both addresses, so clients never notice.
+# cfg.vip.address is the address your router hands out as DNS, the only one.
+# cfg.vip.primary (dns1) holds it while it is healthy; the other node is its
+# backup and takes it over when the primary is drained, fails its checks, or
+# is off, so clients never notice.
 #
 # The nodes talk unicast to each other (no multicast), on the wired interface.
-# A node gives up its addresses when:
+# A node gives up the address, or won't take it, when:
 #
 #   - it is drained: the file /var/lib/keepalived/drained exists. The deploy
 #     creates it before a reboot and removes it once the node is healthy, so a
-#     node that has just booted takes nothing back by itself. `sudo rm` it to
+#     node that has just booted takes nothing by itself. `sudo rm` it to
 #     undrain by hand.
 #   - CoreDNS on it stops answering a name under your domain.
 #   - it can't resolve an internet name and its peer can. When both can't (the
 #     internet is down), both lose the same priority and nothing moves: names
-#     under your domain still answer on both addresses.
+#     under your domain still answer.
 #
-# CoreDNS listens on every address, so it answers on the floating addresses as
+# CoreDNS listens on every address, so it answers on the floating address as
 # well as the node's own; the own addresses keep working.
 
 let
@@ -40,41 +40,12 @@ let
   internetNames = pkgs.writeShellScript "vrrp-internet-names" ''
     ${dig} +short +time=2 +tries=1 @127.0.0.1 cloudflare.com A | ${pkgs.gnugrep}/bin/grep -q .
   '';
-
-  # One VRRP instance per floating address. Router IDs follow the node names'
-  # order (dns1 -> 51, dns2 -> 52), so both nodes agree on them.
-  names = builtins.attrNames cfg.vips;
-  instance = i: name: {
-    name = "dns_${name}";
-    value = {
-      interface = failover.interface;
-      virtualRouterId = 51 + i;
-      # Its own address at 150, the peer's at 100. The internet check takes
-      # 60 off, which puts a node below its peer only when the peer still
-      # passes. The other two checks put the node in FAULT: it holds nothing.
-      priority = if name == me then 150 else 100;
-      unicastSrcIp = own.address;
-      unicastPeers = [ failover.peer ];
-      virtualIps = [{
-        addr = "${cfg.vips.${name}}/${toString own.prefixLength}";
-        dev = failover.interface;
-      }];
-      trackScripts = [ "not_drained" "local_names" "internet_names" ];
-      extraConfig = ''
-        # Drop VRRP packets from anything but the peer.
-        check_unicast_src
-        # Repeat the gratuitous ARP every minute while master, so the router
-        # and switches keep the address on this node's MAC.
-        garp_master_refresh 60
-      '';
-    };
-  };
 in
 {
   options.bunkerDns.failover = {
     interface = mkOption {
       type = types.str;
-      description = "The wired interface the floating addresses live on. Its first static IPv4 address is this node's own.";
+      description = "The wired interface the floating address lives on. Its first static IPv4 address is this node's own.";
     };
     peer = mkOption {
       type = types.str;
@@ -82,14 +53,9 @@ in
     };
   };
 
-  # Without cfg.vips (an older config.local.nix), the nodes have no floating
-  # addresses and answer on their own only, as before.
-  config = lib.mkIf (cfg ? vips) {
-    assertions = [{
-      assertion = cfg.vips ? ${me};
-      message = "cfg.vips has no floating address for ${me}.";
-    }];
-
+  # Without cfg.vip (an older config.local.nix), the nodes have no floating
+  # address and answer on their own only, as before.
+  config = lib.mkIf (cfg ? vip) {
     services.keepalived = {
       enable = true;
       # VRRP and AH through the firewall.
@@ -127,7 +93,29 @@ in
           extraConfig = "init_fail";
         };
       };
-      vrrpInstances = builtins.listToAttrs (lib.imap0 instance names);
+      vrrpInstances.dns = {
+        interface = failover.interface;
+        virtualRouterId = 53;
+        # The primary at 150, the backup at 100. The internet check takes 60
+        # off, which puts the primary below the backup only when the backup
+        # still passes. The other two checks put a node in FAULT: it holds
+        # nothing and the other takes over.
+        priority = if me == cfg.vip.primary then 150 else 100;
+        unicastSrcIp = own.address;
+        unicastPeers = [ failover.peer ];
+        virtualIps = [{
+          addr = "${cfg.vip.address}/${toString own.prefixLength}";
+          dev = failover.interface;
+        }];
+        trackScripts = [ "not_drained" "local_names" "internet_names" ];
+        extraConfig = ''
+          # Drop VRRP packets from anything but the peer.
+          check_unicast_src
+          # Repeat the gratuitous ARP every minute while master, so the router
+          # and switches keep the address on this node's MAC.
+          garp_master_refresh 60
+        '';
+      };
     };
 
     # The checks run as this user, not root.
