@@ -27,4 +27,10 @@
   boot.swraid.enable = lib.mkForce false;
 
   hardware.enableRedistributableFirmware = lib.mkForce false;
+
+  # The sd-image profile turns ZFS support on wherever ZFS builds. Root is
+  # ext4 and nothing uses ZFS, so leave it out: no zfs kernel module to build
+  # against the rpi kernel, no zfs units, and no 26.05 warning about
+  # boot.zfs.forceImportRoot.
+  boot.supportedFilesystems.zfs = lib.mkForce false;
 }
