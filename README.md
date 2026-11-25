@@ -174,7 +174,7 @@ nix build .#nixosConfigurations.dns1.config.system.build.sdImage
 
 Things that may surprise you:
 
-- `flake.lock` pins `nixos-26.05` and `nixos-unstable`; `nix flake update` moves both. spotifyd comes from unstable, so a fix for a Spotify-side protocol change arrives without waiting for a stable backport.
+- `flake.lock` is not committed, so each build uses the latest `nixos-25.05` and `nixos-unstable`. spotifyd comes from unstable, because the 25.05 version can no longer play tracks.
 - `config.local.nix` must stay registered with `git add -N`. A flake cannot see untracked files, and without it the build falls back to the example config and stops.
 - The HiFiBerry device tree overlay is merged into the Pi 4 device tree at build time, because NixOS's own overlay step rejects it.
 
