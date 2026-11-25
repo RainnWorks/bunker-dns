@@ -165,6 +165,8 @@ A Pi Zero 2 W has 512 MB. With `gpu_mem=16`, about 450 MB is left for the system
 
 Logs live in RAM (`/var/log` is a 32 MB tmpfs, and journald is volatile), so they do not wear out the SD card. They are gone after a reboot.
 
+The Zero 2 W nodes also have zram swap: compressed swap in RAM, up to half of it. It gives a deploy's copy and switch some headroom without writing to the SD card.
+
 ## Limits
 
 - **Only your own names survive an outage.** Public sites still need the internet. Unbound can answer only what it already has in its cache.
@@ -231,7 +233,7 @@ To rebuild the README artwork, see [assets/src/README.md](assets/src/README.md).
 This repo also runs RainnWorks' own three nodes. Their config is `sites/rainnworks.nix`, built as the `rainnworks-*` flake outputs. Nothing in it is secret. Your own `config.local.nix` builds the plain `dns1`, `dns2` and `kitchen-music` outputs as before.
 
 - **Pull requests** build all three nodes on GitHub's ARM runners. Nothing is deployed.
-- **A merge to `main`** builds them again and hands the result to a runner on RainnWorks' home server, which deploys one node at a time over the LAN: `dns2`, `dns1`, then `kitchen-music`. A node whose system didn't change is skipped.
+- **A merge to `main`** builds them again and hands the result to a runner on RainnWorks' home server, which deploys one node at a time over the LAN: `dns2`, `dns1`, then `kitchen-music`. A node whose system didn't change is skipped. The runner sends each node its whole new system over the LAN; the node doesn't download anything itself, which a Zero 2 W hasn't the memory for. A node that stops answering fails the run within minutes: every copy and remote command has a time limit.
 - **The deploy reboots `dns1` and `dns2`.** Each in turn is drained, and the other must then hold the floating address and answer on it: draining dns2 moves nothing, draining dns1 moves the address to dns2. Then it gets the new system, reboots into it, and is checked: its services, DNS on its own address, and that it booted the new system and kernel. Then it is undrained; dns1 must hold the address and answer on it, and dns2 must be keepalived's backup again. DNS keeps answering throughout. A merge that changes the DNS nodes therefore reboots them; one that changes only `kitchen-music` doesn't.
 - **If a DNS node fails a check**, it goes back to its previous generation (rebooting into it if the kernel changed) and stays drained, so the address stays on the other node. The run stops. Once it's fixed, undrain it by hand (`sudo rm /var/lib/keepalived/drained`), or merge the fix: a run that finds a node drained on the right system checks it and undrains it.
 - **`kitchen-music`** is switched live without a reboot, checked, and rolled back if the check fails. The run then stops.
