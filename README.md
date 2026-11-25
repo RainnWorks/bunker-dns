@@ -28,10 +28,14 @@
      localIP = "192.168.1.100";   # your homelab server
      sshKey = "ssh-ed25519 AAAA...";
      timeZone = "Europe/London";
+     vips = {                     # floating DNS addresses, outside the DHCP pool
+       dns1 = "192.168.1.3";
+       dns2 = "192.168.1.4";
+     };
    }
    ```
 
-   The build stops with an error while `sshKey` is still the placeholder.
+   The build stops with an error while `sshKey` is still the placeholder. `vips` are the two addresses your devices use for DNS. dns1 holds the first and dns2 the second; when one node is down, the other holds both. Leave `vips` out to use the nodes' own addresses instead.
 4. **Create the build VM.**
 
    ```sh
@@ -48,11 +52,12 @@
 
    `make flash` hides your system disks and asks which disk to write. Repeat with `HOST=dns2`.
 6. **Boot the Pis.** Put in the SD cards and plug in the ethernet. Each node takes an address by DHCP. In your router, reserve that address for each node.
-7. **Point your network at them.** Set your router's DHCP DNS servers to the two node addresses.
-8. **Check it.** A name under your domain returns your homelab's address:
+7. **Point your network at them.** Set your router's DHCP DNS servers to the two floating addresses in `vips` (or to the two node addresses, without `vips`).
+8. **Check it.** A name under your domain returns your homelab's address, on both floating addresses:
 
    ```sh
-   dig @<dns1-ip> ha.example.com +short
+   dig @192.168.1.3 ha.example.com +short
+   dig @192.168.1.4 ha.example.com +short
    ```
 
 ## Use
@@ -68,11 +73,15 @@ Once your router hands out the two nodes, every device on the network uses them.
 | Push a change without reflashing | `make deploy HOST=dns1 IP=<node-ip>` |
 | Clear a stale DNS answer | `curl http://<node-ip>:8053/flush?d=example.org` for one domain, or `curl http://<node-ip>:8053/flush` for everything |
 | Run health checks | `make test IP=<node-ip>` |
+| See which node holds which floating address | `ssh tom@<node-ip>`, then `ip -4 addr show enu1u4` (and `journalctl -u keepalived`) |
+| Take a DNS node out of service by hand | `sudo touch /var/lib/keepalived/drained` on it: its floating address moves to the other node, and stays there through reboots. `sudo rm /var/lib/keepalived/drained` puts it back |
 | Watch the nodes from Home Assistant | Metrics on `:9100` (system and services) and `:9153` (CoreDNS). See [docs/home-assistant-prometheus.md](docs/home-assistant-prometheus.md) |
 
-`make deploy` builds the new system in the VM, copies only what changed to the node over SSH and switches to it. If you leave out `IP`, it tries `<host>.local`, which only `kitchen-music` announces. A reboot is needed only when the kernel changed, and the switch says so.
+`make deploy` builds the new system in the VM, copies only what changed to the node over SSH and switches to it. If you leave out `IP`, it tries `<host>.local`, which only `kitchen-music` announces. A reboot is needed only when the kernel changed, and the switch says so. `make deploy` doesn't drain the node first; if keepalived's config changed, it restarts and the node's floating address goes to the other node for a few seconds.
 
 The blocklists are the AdGuard DNS filter, OISD (small), a Smart TV list and Fanboy's Annoyances. Blocked names get NXDOMAIN, so apps fail at once instead of hanging on a dead address. The lists are kept on the SD card, so blocking works straight after a reboot.
+
+A `/flush` clears only the node you send it to. Sent to a floating address, that is whichever node holds it.
 
 A `/flush` for one domain also flushes its parent (`flush?d=a.example.org` clears `example.org` too), then restarts AdGuard Home and CoreDNS to clear their caches. That node stops answering for about a second.
 
@@ -110,6 +119,24 @@ graph LR
 **AdGuard Home** checks everything else against the blocklists and passes clean queries on.
 
 **Unbound** is a recursive resolver. It asks the root servers directly instead of forwarding to Google or Cloudflare, so your lookups never go through a third party. It validates DNSSEC, and it saves its cache to the SD card every 2 hours and loads it back at boot.
+
+### Floating addresses
+
+Devices are given two floating addresses, not the nodes' own. Each node holds one, and is the other's backup ([keepalived](https://keepalived.org), VRRP, the two nodes talking to each other by unicast on the wired port):
+
+```mermaid
+graph LR
+    D[Devices] -->|DNS 1| VA[192.168.1.3]
+    D -->|DNS 2| VB[192.168.1.4]
+    VA -->|normally| N1[dns1]
+    VB -->|normally| N2[dns2]
+    VA -.->|dns1 down or drained| N2
+    VB -.->|dns2 down or drained| N1
+```
+
+A node hands its address to the other within a few seconds when it is drained (`/var/lib/keepalived/drained` exists), when CoreDNS on it stops answering a name under your domain, when it is off, or when it can't resolve an internet name and the other can. If neither can reach the internet, nothing moves: both keep answering for your own names. A node that has just started takes its address back only once it answers. CoreDNS listens on every address, so the nodes' own addresses keep answering too.
+
+`kitchen-music` has no floating address. Its own address works as a third DNS server.
 
 Every node is declared in one NixOS flake. Hosts are short import lists: `hosts/dns1.nix` pulls in the Pi Zero hardware, the DNS stack and metrics; `hosts/kitchen-music.nix` adds the HiFiBerry and the two audio receivers.
 
@@ -172,6 +199,12 @@ On an aarch64 Linux machine with Nix and flakes, you can build an image directly
 nix build .#nixosConfigurations.dns1.config.system.build.sdImage
 ```
 
+The failover test runs two DNS nodes and a client in VMs. It needs an x86_64 Linux machine with KVM:
+
+```sh
+nix build -L .#checks.x86_64-linux.failover
+```
+
 Things that may surprise you:
 
 - `flake.lock` pins `nixos-26.05` and `nixos-unstable`; `nix flake update` moves both. spotifyd comes from unstable, so a fix for a Spotify-side protocol change arrives without waiting for a stable backport.
@@ -186,11 +219,12 @@ config.example.nix           # copied to config.local.nix by make init
 hosts/                       # one import list per node
 modules/
   base.nix                   # SSH, NTP, user, journald, tmpfs logs
-  dns/                       # CoreDNS, AdGuard Home, Unbound, /flush
+  dns/                       # CoreDNS, AdGuard Home, Unbound, /flush, floating addresses
   audio/                     # spotifyd, shairport-sync
   hardware/                  # Pi Zero 2 W, Pi 4, HiFiBerry Amp4
   observability.nix          # Prometheus node exporter
 scripts/                     # setup, build, flash, deploy, test
+tests/failover.nix           # two DNS nodes in VMs, failing over
 assets/src/                  # README artwork sources and render script
 ```
 
@@ -201,5 +235,9 @@ To rebuild the README artwork, see [assets/src/README.md](assets/src/README.md).
 This repo also runs RainnWorks' own three nodes. Their config is `sites/rainnworks.nix`, built as the `rainnworks-*` flake outputs. Nothing in it is secret. Your own `config.local.nix` builds the plain `dns1`, `dns2` and `kitchen-music` outputs as before.
 
 - **Pull requests** build all three nodes on GitHub's ARM runners. Nothing is deployed.
-- **A merge to `main`** builds them again and hands the result to a runner on RainnWorks' home server, which deploys one node at a time over the LAN: `dns2`, `dns1`, then `kitchen-music`. A node whose system didn't change is skipped. Each node checks its services and DNS after switching, and rolls back if the check fails. The run then stops.
+- **A merge to `main`** builds them again and hands the result to a runner on RainnWorks' home server, which deploys one node at a time over the LAN: `dns2`, `dns1`, then `kitchen-music`. A node whose system didn't change is skipped.
+- **The deploy reboots `dns1` and `dns2`.** Each in turn is drained, so the other holds both floating addresses (checked: it holds them and both answer). Then it gets the new system, reboots into it, and is checked: its services, DNS on its own address, and that it booted the new system and kernel. Then it is undrained, and must take its floating address back and answer on it. DNS keeps answering throughout. A merge that changes the DNS nodes therefore reboots them; one that changes only `kitchen-music` doesn't.
+- **If a DNS node fails a check**, it goes back to its previous generation (rebooting into it if the kernel changed) and stays drained, so the other node keeps both addresses. The run stops. Once it's fixed, undrain it by hand (`sudo rm /var/lib/keepalived/drained`), or merge the fix: a run that finds a node drained on the right system checks it and undrains it.
+- **`kitchen-music`** is switched live without a reboot, checked, and rolled back if the check fails. The run then stops.
+- **Pull requests and merges** also run `tests/failover.nix`, two DNS nodes and a client in VMs, failing over. A failing test stops the deploy.
 - **Secrets** never go in the repo in plain text. Decrypted files are named `*.secret.*`, which git always ignores and the pre-commit hook refuses.

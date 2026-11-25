@@ -1,6 +1,6 @@
 # Build every host on GitHub's ARM runners; on main, deploy from Tower.
 #
-# `build` runs on every pull request and on main. On main it also uploads
+# `build` and `failover-test` run on every pull request and on main. On main it also uploads
 # the built systems as an artifact. `deploy` then runs on Tower's own runner,
 # inside the home network, and pushes them to the Pis over the LAN.
 #
@@ -63,11 +63,32 @@ jobs:
           retention-days: 3
           compression-level: 0 # already zstd
 
+  # Two DNS nodes and a client in VMs, failing over (tests/failover.nix).
+  # x86_64, for the runners' KVM.
+  failover-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Let the runner user use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+        with:
+          extra_nix_config: system-features = nixos-test benchmark big-parallel kvm
+      - name: Run the test
+        run: nix build -L .#checks.x86_64-linux.failover
+
   deploy:
-    needs: build
+    needs: [build, failover-test]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, tower]
     environment: production
+    # Each DNS Pi reboots and is waited on; a stuck run shouldn't hold the
+    # deploy lock for hours.
+    timeout-minutes: 90
     concurrency:
       group: deploy
       cancel-in-progress: false
@@ -95,6 +116,8 @@ jobs:
             ConnectTimeout 15
           EOF
 
+      # The DNS Pis reboot one at a time, the other holding both floating
+      # addresses meanwhile. See scripts/ci-deploy.sh.
       - name: Deploy, one Pi at a time
         env:
           SYSTEMS_STORE: file://${{ github.workspace }}/systems

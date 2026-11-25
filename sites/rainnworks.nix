@@ -17,4 +17,12 @@ in
     then [ ''from="192.168.96.14" ${builtins.replaceStrings [ "\n" ] [ "" ] (builtins.readFile deployKey)}'' ]
     else [ ];
   timeZone = "Europe/Paris";
+  # The floating DNS addresses the UDM hands out (keepalived, see
+  # modules/dns/failover.nix): each node's own while both are healthy. Outside
+  # the LAN's DHCP pool (.96.11-.97.254). .96.2 is taken by the UDM itself;
+  # .96.3 and .96.4 were free on 2026-11-25 (no reservation, ARP or ping).
+  vips = {
+    dns1 = "192.168.96.3";
+    dns2 = "192.168.96.4";
+  };
 }

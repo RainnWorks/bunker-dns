@@ -32,5 +32,10 @@
       nixosConfigurations =
         mkHosts "" (import ./config.nix)
         // mkHosts "rainnworks-" (import ./sites/rainnworks.nix);
+
+      # Two DNS nodes in VMs, failing over (tests/failover.nix). x86_64 so it
+      # runs under KVM on an ordinary Linux machine or GitHub runner.
+      checks.x86_64-linux.failover =
+        nixpkgs.legacyPackages.x86_64-linux.testers.runNixOSTest ./tests/failover.nix;
     };
 }
