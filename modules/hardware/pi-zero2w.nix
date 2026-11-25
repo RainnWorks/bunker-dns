@@ -3,7 +3,14 @@
 {
   imports = [ ./_shared/rpi-base.nix ];
 
-  boot.kernelPackages = pkgs.linuxPackages_rpi02w;
+  # The generic aarch64 kernel, the one NixOS's own aarch64 SD image boots
+  # on a Pi 3 or Zero 2 W, and on cache.nixos.org. nixpkgs 26.05's linux-rpi
+  # isn't: Hydra stopped building it, and nixpkgs drops it after 26.05.
+  # Nothing here needs the vendor kernel. U-Boot already loads the upstream
+  # device tree (bcm2837-rpi-zero-2-w.dtb), and the SD card (sdhost), USB
+  # (dwc2), the firmware interface and the watchdog (bcm2835-wdt, which is
+  # also how the Pi reboots) are built in. r8152 is a module, loaded below.
+  boot.kernelPackages = pkgs.linuxPackages;
   boot.initrd.availableKernelModules = [ "xhci_pci" "usbhid" "usb_storage" "r8152" ];
   boot.kernelModules = [ "r8152" ];
 
@@ -17,6 +24,26 @@
   hardware.deviceTree = {
     enable = true;
     filter = "*rpi-zero-2*";
+    # The upstream device tree leaves the USB controller in OTG mode, which
+    # picks host or device from the ID pin. Force host, for the USB ethernet
+    # HAT. The dtoverlay line in config.txt below doesn't reach Linux: it
+    # changes the firmware's device tree, and U-Boot boots Linux with this one.
+    overlays = [
+      {
+        name = "dwc2-host";
+        dtsText = ''
+          /dts-v1/;
+          /plugin/;
+          / {
+            compatible = "brcm,bcm2837";
+            fragment@0 {
+              target-path = "/soc/usb@7e980000";
+              __overlay__ { dr_mode = "host"; };
+            };
+          };
+        '';
+      }
+    ];
   };
 
   sdImage.populateFirmwareCommands = lib.mkAfter ''
