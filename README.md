@@ -142,6 +142,8 @@ A Pi Zero 2 W has 512 MB. With `gpu_mem=16`, about 450 MB is left for the system
 
 Logs live in RAM (`/var/log` is a 32 MB tmpfs, and journald is volatile), so they do not wear out the SD card. They are gone after a reboot.
 
+The Zero 2 W nodes also have zram swap: compressed swap in RAM, up to half of it. It gives a deploy's copy and switch some headroom without writing to the SD card.
+
 ## Limits
 
 - **Only your own names survive an outage.** Public sites still need the internet. Unbound can answer only what it already has in its cache.
@@ -201,5 +203,5 @@ To rebuild the README artwork, see [assets/src/README.md](assets/src/README.md).
 This repo also runs RainnWorks' own three nodes. Their config is `sites/rainnworks.nix`, built as the `rainnworks-*` flake outputs. Nothing in it is secret. Your own `config.local.nix` builds the plain `dns1`, `dns2` and `kitchen-music` outputs as before.
 
 - **Pull requests** build all three nodes on GitHub's ARM runners. Nothing is deployed.
-- **A merge to `main`** builds them again and hands the result to a runner on RainnWorks' home server, which deploys one node at a time over the LAN: `dns2`, `dns1`, then `kitchen-music`. A node whose system didn't change is skipped. Each node checks its services and DNS after switching, and rolls back if the check fails. The run then stops.
+- **A merge to `main`** builds them again and hands the result to a runner on RainnWorks' home server, which deploys one node at a time over the LAN: `dns2`, `dns1`, then `kitchen-music`. A node whose system didn't change is skipped. The runner sends each node its whole new system over the LAN; the node doesn't download anything itself, which a Zero 2 W hasn't the memory for. Each node checks its services and DNS after switching, and rolls back if the check fails. The run then stops. A node that stops answering fails the run within minutes: every copy and remote command has a time limit.
 - **Secrets** never go in the repo in plain text. Decrypted files are named `*.secret.*`, which git always ignores and the pre-commit hook refuses.

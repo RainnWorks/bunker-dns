@@ -13,8 +13,18 @@
 # Expects ssh to reach tom@<ip> with the deploy key (the workflow sets
 # NIX_SSHOPTS and an ssh config). SYSTEMS_STORE, if set, is where the built
 # systems are (the workflow's artifact, a file:// store); otherwise they
-# must already be in the local Nix store. Each Pi fetches what it can from
-# cache.nixos.org itself, so only what's ours crosses the LAN.
+# must already be in the local Nix store.
+#
+# The whole closure goes from here to the Pi over the LAN; the Pi doesn't
+# download from cache.nixos.org itself. With --substitute-on-destination a
+# Pi Zero 2 W (about 450 MB) ran Nix's many parallel downloads and
+# decompressions, ran out of memory mid-copy and stopped answering anything
+# for four hours (2026-11-25). Here the Pi only unpacks one stream; the
+# artifact holds the full closure anyway.
+#
+# Every ssh, including nix copy's, gives up on a Pi that stops answering
+# (ServerAlive*), and every remote command and copy has a time limit, so a
+# hung Pi fails the run instead of holding it until GitHub's 6 hours.
 set -euo pipefail
 
 declare -A IP=( [dns1]=192.168.96.45 [dns2]=192.168.96.60 [kitchen-music]=192.168.96.157 )
@@ -26,9 +36,14 @@ declare -A SERVICES=(
 DOMAIN=$(nix eval --raw --file sites/rainnworks.nix domain)
 LOCAL_IP=$(nix eval --raw --file sites/rainnworks.nix localIP)
 
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+export NIX_SSHOPTS="${NIX_SSHOPTS:-} ${SSH_OPTS[*]}"
+ON_PI_TIMEOUT=600 # seconds; a switch restarts services, so allow some minutes
+COPY_TIMEOUT=1800 # seconds; a new release's closure is about 1 GB over USB Ethernet
+
 # The command is built here and run there, so expanding it locally is the point.
 # shellcheck disable=SC2029
-on_pi() { ssh "tom@$1" "$2"; }
+on_pi() { timeout "$ON_PI_TIMEOUT" ssh "${SSH_OPTS[@]}" "tom@$1" "$2"; }
 
 healthy() {
   local host=$1 ip=${IP[$1]}
@@ -55,8 +70,11 @@ for arg in "$@"; do
   fi
 
   echo "  copying closure"
-  nix copy --no-check-sigs --substitute-on-destination \
-    ${SYSTEMS_STORE:+--from "$SYSTEMS_STORE"} --to "ssh-ng://tom@$ip" "$path"
+  if ! timeout "$COPY_TIMEOUT" nix copy --no-check-sigs \
+    ${SYSTEMS_STORE:+--from "$SYSTEMS_STORE"} --to "ssh-ng://tom@$ip" "$path"; then
+    echo "::error::Copying to $host failed or took over $((COPY_TIMEOUT / 60)) minutes. Nothing was switched; $host and later hosts keep what they had."
+    exit 1
+  fi
 
   echo "  switching"
   if on_pi "$ip" "sudo nix-env -p /nix/var/nix/profiles/system --set '$path' && sudo '$path/bin/switch-to-configuration' switch" &&

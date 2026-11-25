@@ -68,6 +68,9 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, tower]
     environment: production
+    # scripts/ci-deploy.sh limits each copy and remote command; this is the
+    # backstop, so a stuck run can't hold the deploy lock for GitHub's 6 hours.
+    timeout-minutes: 90
     concurrency:
       group: deploy
       cancel-in-progress: false

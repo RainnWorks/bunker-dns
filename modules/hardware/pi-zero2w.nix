@@ -7,6 +7,13 @@
   boot.initrd.availableKernelModules = [ "xhci_pci" "usbhid" "usb_storage" "r8152" ];
   boot.kernelModules = [ "r8152" ];
 
+  # About 450 MB and no swap. Without swap, a burst of memory use (a deploy's
+  # nix copy, a new release's first switch) thrashes instead of swapping:
+  # dns2 stopped answering even SSH for hours on 2026-11-25. Compressed swap
+  # in RAM (zstd, at most half the RAM) gives that headroom without writing
+  # to the SD card.
+  zramSwap.enable = true;
+
   hardware.deviceTree = {
     enable = true;
     filter = "*rpi-zero-2*";
