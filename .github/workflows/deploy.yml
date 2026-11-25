@@ -36,15 +36,76 @@ jobs:
           fi
       - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
 
+      # Anything cache.nixos.org doesn't have is built here, and some of it
+      # is slow: nixpkgs 26.05's Raspberry Pi kernel isn't on cache.nixos.org
+      # and takes about 85 minutes to compile. So keep what we build in
+      # GitHub's Actions cache, as a binary cache in built/, and substitute
+      # from it. GitHub scopes caches by branch: main only restores what
+      # main saved, so a pull request can't plant anything in a deploy.
+      - name: Restore what earlier runs built
+        id: restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: built
+          key: built-${{ github.sha }} # never saved; restore-keys finds the newest
+          restore-keys: built-
+
       - name: Build
         id: build
         run: |
+          substituters=()
+          if [ -f built/nix-cache-info ]; then
+            # Unsigned, so trusted=true for this cache alone; cache.nixos.org
+            # still has to be signed.
+            substituters=(--option extra-substituters "file://$PWD/built?trusted=true")
+          fi
           for host in dns1 dns2 kitchen-music; do
-            path=$(nix build --no-link --print-out-paths \
+            path=$(nix build --no-link --print-out-paths "${substituters[@]}" \
               ".#nixosConfigurations.rainnworks-$host.config.system.build.toplevel")
             echo "$host=$path" >> "$GITHUB_OUTPUT"
             echo "$host: $path"
           done
+
+      # The paths in the three systems that aren't from cache.nixos.org and
+      # are at least 1 MiB: the kernel, spotifyd, initrds, device trees. The
+      # rest are config files and symlink farms that rebuild in seconds, and
+      # caching those would drag in the whole system, since a binary cache
+      # must hold each path's full closure. Saved again only when the list
+      # changes.
+      - name: Collect what cache.nixos.org doesn't have
+        id: collect
+        env:
+          RESTORED: ${{ steps.restore.outputs.cache-matched-key }}
+          SYSTEMS: >-
+            ${{ steps.build.outputs.dns1 }}
+            ${{ steps.build.outputs.dns2 }}
+            ${{ steps.build.outputs.kitchen-music }}
+        run: |
+          list="$RUNNER_TEMP/built-paths"
+          # shellcheck disable=SC2086 # SYSTEMS is a list of store paths
+          nix path-info --recursive --json --json-format 2 $SYSTEMS |
+            jq -r '.info | to_entries[]
+              | select(.value.narSize >= 1048576)
+              | select(all(.value.signatures[]; startswith("cache.nixos.org-1:") | not))
+              | "/nix/store/\(.key)"' | sort > "$list"
+          cat "$list"
+          [ -s "$list" ] || exit 0
+          key="built-$(sha256sum < "$list" | cut -c1-32)"
+          if [ "$key" = "$RESTORED" ]; then
+            echo "Unchanged since $RESTORED."
+            exit 0
+          fi
+          rm -rf built
+          xargs nix copy --to "file://$PWD/built?compression=zstd" < "$list"
+          du -sh built
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Save it for later runs
+        if: steps.collect.outputs.key != ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: built
+          key: ${{ steps.collect.outputs.key }}
 
       - name: Pack the systems for Tower
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
