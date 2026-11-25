@@ -2,6 +2,7 @@
   imports = [
     ../modules/hardware/pi-zero2w.nix
     ../modules/dns
+    ../modules/dns/failover.nix
     ../modules/observability.nix
   ];
 
@@ -13,4 +14,10 @@
     { address = "192.168.96.45"; prefixLength = 23; }
   ];
   networking.defaultGateway = "192.168.96.1";
+
+  # Holds the floating DNS address (cfg.vip) while healthy.
+  bunkerDns.failover = {
+    interface = "enu1u4";
+    peer = "192.168.96.60";
+  };
 }

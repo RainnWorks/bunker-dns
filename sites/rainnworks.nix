@@ -17,4 +17,13 @@ in
     then [ ''from="192.168.96.14" ${builtins.replaceStrings [ "\n" ] [ "" ] (builtins.readFile deployKey)}'' ]
     else [ ];
   timeZone = "Europe/Paris";
+  # The floating DNS address, the only DNS server the UDM hands out
+  # (keepalived, see modules/dns/failover.nix). dns1 holds it; dns2 is its
+  # backup. Outside the LAN's DHCP pool (.96.11-.97.254): .96.2 is taken by
+  # the UDM itself, and .96.3 was free on 2026-11-25 (no reservation, ARP or
+  # ping). Inlustra/thenairn.com holds the same value, in udm/lan/dns1.ts.
+  vip = {
+    address = "192.168.96.3";
+    primary = "dns1";
+  };
 }
