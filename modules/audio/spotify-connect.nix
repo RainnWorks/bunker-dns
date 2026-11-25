@@ -7,9 +7,11 @@
 # hardware-mixer volume on capable DACs.
 
 {
-  # Pull spotifyd from nixos-unstable: 25.05 ships v0.4.1 which hits the
-  # 2025 Spotify protocol change and 404s on every track. v0.4.2 (Nov 2025)
-  # fixes it but requires rustc 1.88, only available in unstable.
+  # Pull spotifyd from nixos-unstable. 25.05 shipped v0.4.1, which hits the
+  # 2025 Spotify protocol change and 404s on every track; v0.4.2 (Nov 2025)
+  # fixed it but needed rustc 1.88, then only in unstable. 26.05 ships 0.4.2
+  # too; spotifyd stays on unstable so the next fix for a Spotify-side
+  # change reaches the speaker without waiting for a stable backport.
   #
   # withMpris = false drops the dbus_mpris feature at compile time. The
   # default Linux build links MPRIS, which requires D-Bus — and on a

@@ -16,6 +16,9 @@
         fallback_dns = [];
         ratelimit = 0;
         fastest_addr = false;
+        # Config schema 30 added cache_enabled. AdGuard Home defaults it
+        # to true; say so here rather than rely on cache_size alone.
+        cache_enabled = true;
         cache_size = 8388608;
         cache_ttl_min = 0;
         cache_ttl_max = 0;

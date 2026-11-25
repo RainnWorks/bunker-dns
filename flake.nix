@@ -2,9 +2,9 @@
   description = "pi-dns-stack - Ad-blocking DNS on Raspberry Pi with NixOS";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
-    # Used selectively for packages we need newer than 25.05 ships
-    # (e.g. spotifyd 0.4.2 needs rustc 1.88, only in unstable).
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    # Used selectively for packages we want newer than stable ships
+    # (spotifyd, see modules/audio/spotify-connect.nix).
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
   };
 

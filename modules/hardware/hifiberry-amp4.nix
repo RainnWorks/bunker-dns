@@ -12,7 +12,7 @@ let
   #
   # Note: hifiberry-dacplus-std covers the DAC+ Standard, Amp2, and Amp4
   # family (kernel >= 6.1.77). For the Amp4 Pro use hifiberry-amp4pro instead.
-  mergedDtbs = pkgs.runCommandNoCC "rpi-dtbs-with-hifiberry-amp4" {
+  mergedDtbs = pkgs.runCommand "rpi-dtbs-with-hifiberry-amp4" {
     nativeBuildInputs = [ pkgs.dtc ];
   } ''
     mkdir -p $out
