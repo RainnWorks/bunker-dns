@@ -67,11 +67,12 @@ jobs:
           done
 
       # The paths in the three systems that aren't from cache.nixos.org and
-      # are at least 1 MiB: the kernel, spotifyd, initrds, device trees. The
-      # rest are config files and symlink farms that rebuild in seconds, and
-      # caching those would drag in the whole system, since a binary cache
-      # must hold each path's full closure. Saved again only when the list
-      # changes.
+      # are at least 1 MiB: the kernel and its modules, initrds, spotifyd,
+      # hwdb. The rest are config files that rebuild in seconds. Skip
+      # system-path too: it's a symlink farm that rebuilds in seconds, and a
+      # binary cache must hold each path's full closure, so it would drag in
+      # every package (830 MB instead of the kernel's share). Saved again
+      # only when the list changes.
       - name: Collect what cache.nixos.org doesn't have
         id: collect
         env:
@@ -86,6 +87,7 @@ jobs:
           nix path-info --recursive --json --json-format 2 $SYSTEMS |
             jq -r '.info | to_entries[]
               | select(.value.narSize >= 1048576)
+              | select(.key | endswith("-system-path") | not)
               | select(all(.value.signatures[]; startswith("cache.nixos.org-1:") | not))
               | "/nix/store/\(.key)"' | sort > "$list"
           cat "$list"
