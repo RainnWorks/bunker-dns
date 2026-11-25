@@ -43,6 +43,14 @@
 
   security.sudo.wheelNeedsPassword = false;
 
+  # 26.05 made dbus-broker the default D-Bus. Changing implementation needs a
+  # reboot, not a live switch, and the deploy only ever switches live. Its
+  # guard (a "switch inhibitor") can't catch the first move, because 25.05
+  # systems don't record which implementation they run. So keep the classic
+  # daemon here. Moving to dbus-broker later means a deploy that does
+  # `switch-to-configuration boot` and reboots each Pi.
+  services.dbus.implementation = "dbus";
+
   # Let wheel users push closures via `nix copy --to ssh-ng://...` for remote
   # deploys (`nixos-rebuild --target-host`). Without this, only root can write
   # to the store, and untrusted users can't push unsigned paths even with
